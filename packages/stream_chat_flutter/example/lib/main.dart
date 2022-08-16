@@ -1,98 +1,217 @@
+// ignore_for_file: public_member_api_docs
+// ignore_for_file: prefer_expression_function_bodies
+
 import 'package:flutter/material.dart';
 import 'package:stream_chat_flutter/stream_chat_flutter.dart';
-import 'package:stream_chat_localizations/stream_chat_localizations.dart';
 
+/// Second step of the [tutorial](https://getstream.io/chat/flutter/tutorial/)
+///
+/// Most chat applications handle more than just one single conversation.
+/// Apps like Facebook Messenger, Whatsapp and Telegram allows you to have
+/// multiple one-to-one and group conversations.
+///
+/// Let’s find out how we can change our application chat screen to display
+/// the list of conversations and navigate between them.
+///
+/// > Note: the SDK uses Flutter’s [Navigator] to move from one route to
+/// another. This allows us to avoid any boiler-plate code.
+/// > Of course, you can take total control of how navigation works by
+/// customizing widgets like [StreamChannel] and [StreamChannelListView].
+///
+/// If you run the application, you will see that the first screen shows a
+/// list of conversations, you can open each by tapping and go back to the list.
+///
+/// Every single widget involved in this UI can be customized or swapped
+/// with your own.
+///
+/// The [ChannelListPage] widget retrieves the list of channels based on a
+/// custom query and ordering. In this case we are showing the list of
+/// channels in which the current user is a member and we order them based
+/// on the time they had a new message.
+/// [StreamChannelListView] handles pagination
+/// and updates automatically when new channels are created or when a new
+/// message is added to a channel.
 void main() async {
-  WidgetsFlutterBinding.ensureInitialized();
-
-  /// Create a new instance of [StreamChatClient] passing the apikey obtained
-  /// from your project dashboard.
   final client = StreamChatClient(
     's2dxdhpxd94g',
     logLevel: Level.INFO,
   );
 
-  /// Set the current user and connect the websocket. In a production
-  /// scenario, this should be done using a backend to generate a user token
-  /// using our server SDK.
-  ///
-  /// Please see the following for more information:
-  /// https://getstream.io/chat/docs/ios_user_setup_and_tokens/
   await client.connectUser(
     User(id: 'super-band-9'),
     '''eyJ0eXAiOiJKV1QiLCJhbGciOiJIUzI1NiJ9.eyJ1c2VyX2lkIjoic3VwZXItYmFuZC05In0.0L6lGoeLwkz0aZRUcpZKsvaXtNEDHBcezVTZ0oPq40A''',
   );
 
-  final channel = client.channel('messaging', id: 'godevs');
-
-  await channel.watch();
-
   runApp(
     MyApp(
       client: client,
-      channel: channel,
     ),
   );
 }
 
-/// Example application using Stream Chat Flutter widgets.
-///
-/// Stream Chat Flutter is a set of Flutter widgets which provide full chat
-/// functionalities for building Flutter applications using Stream. If you'd
-/// prefer using minimal wrapper widgets for your app, please see our other
-/// package, `stream_chat_flutter_core`.
 class MyApp extends StatelessWidget {
-  /// Example using Stream's Flutter package.
-  ///
-  /// If you'd prefer using minimal wrapper widgets for your app, please see
-  /// our other package, `stream_chat_flutter_core`.
   const MyApp({
     super.key,
     required this.client,
-    required this.channel,
   });
 
-  /// Instance of Stream Client.
-  ///
-  /// Stream's [StreamChatClient] can be used to connect to our servers and
-  /// set the default user for the application. Performing these actions
-  /// trigger a websocket connection allowing for real-time updates.
   final StreamChatClient client;
 
-  /// Instance of the Channel
-  final Channel channel;
+  @override
+  Widget build(BuildContext context) {
+    return MaterialApp(
+      builder: (context, child) => StreamChat(
+        client: client,
+        child: child,
+      ),
+      home: ChannelListPage(
+        client: client,
+      ),
+    );
+  }
+}
+
+class ChannelListPage extends StatefulWidget {
+  const ChannelListPage({
+    super.key,
+    required this.client,
+  });
+
+  final StreamChatClient client;
 
   @override
-  Widget build(BuildContext context) => MaterialApp(
-        theme: ThemeData.light(),
-        darkTheme: ThemeData.dark(),
-        supportedLocales: const [
-          Locale('en'),
-          Locale('hi'),
-          Locale('fr'),
-          Locale('it'),
-          Locale('es'),
-        ],
-        localizationsDelegates: GlobalStreamChatLocalizations.delegates,
-        builder: (context, widget) => StreamChat(
-          client: client,
-          child: widget,
-        ),
-        home: StreamChannel(
-          channel: channel,
-          child: const ChannelPage(),
+  State<ChannelListPage> createState() => _ChannelListPageState();
+}
+
+class _ChannelListPageState extends State<ChannelListPage> {
+  late final channelListController = StreamChannelListController(
+    client: widget.client,
+    filter: Filter.in_(
+      'members',
+      [StreamChat.of(context).currentUser!.id],
+    ),
+    sort: const [SortOption('last_message_at')],
+  );
+
+  @override
+  void initState() {
+    channelListController.doInitialLoad();
+    super.initState();
+  }
+
+  @override
+  void dispose() {
+    channelListController.dispose();
+    super.dispose();
+  }
+
+  late Channel lastChannel;
+  int count = 0;
+
+  @override
+  Widget build(BuildContext context) => Scaffold(
+        body: PagedValueListenableBuilder<int, Channel>(
+          valueListenable: channelListController,
+          builder: (context, value, child) {
+            return value.when(
+              (channels, nextPageKey, error) => LazyLoadScrollView(
+                onEndOfPage: () async {
+                  if (nextPageKey != null) {
+                    channelListController.loadMore(nextPageKey);
+                  }
+                },
+                child: ListView.builder(
+                  /// We're using the channels length when there are no more
+                  /// pages to load and there are no errors with pagination.
+                  /// In case we need to show a loading indicator or and error
+                  /// tile we're increasing the count by 1.
+                  itemCount: (nextPageKey != null || error != null)
+                      ? channels.length + 1
+                      : channels.length,
+                  itemBuilder: (BuildContext context, int index) {
+                    if (index == channels.length) {
+                      if (error != null) {
+                        return TextButton(
+                          onPressed: () {
+                            channelListController.retry();
+                          },
+                          child: Text(error.message),
+                        );
+                      }
+                      return CircularProgressIndicator();
+                    }
+
+                    final _item = channels[index];
+                    return ListTile(
+                      title: _item.extraData['hidden'] == false
+                          ? Text(_item.name ?? 'Dummy')
+                          : Text("Hidden"),
+                      subtitle: StreamBuilder<Message?>(
+                        stream: _item.state!.lastMessageStream,
+                        initialData: _item.state!.lastMessage,
+                        builder: (context, snapshot) {
+                          if (snapshot.hasData) {
+                            return Text(snapshot.data!.text!);
+                          }
+
+                          return const SizedBox();
+                        },
+                      ),
+                      onTap: () {
+                        print(count);
+                        if (_item.extraData['hidden'] == false) {
+                          if (count > 0) {
+                            print("object");
+                            lastChannel.show();
+                          }
+                          _item.hide();
+                          setState(() {
+                            lastChannel = _item;
+                            count = count + 1;
+                          });
+                        } else {
+                          _item.show();
+                        }
+
+                        /// Display a list of messages when the user taps on
+                        /// an item. We can use [StreamChannel] to wrap our
+                        /// [MessageScreen] screen with the selected channel.
+                        ///
+                        /// This allows us to use a built-in inherited widget
+                        /// for accessing our `channel` later on.
+                        // Navigator.of(context).push(
+                        //   MaterialPageRoute(
+                        //     builder: (context) => StreamChannel(
+                        //       channel: _item,
+                        //       child: const MessageScreen(),
+                        //     ),
+                        //   ),
+                        // );
+                      },
+                    );
+                  },
+                ),
+              ),
+              loading: () => const Center(
+                child: SizedBox(
+                  height: 100,
+                  width: 100,
+                  child: CircularProgressIndicator(),
+                ),
+              ),
+              error: (e) => Center(
+                child: Text(
+                  'Oh no, something went wrong. '
+                  'Please check your config. $e',
+                ),
+              ),
+            );
+          },
         ),
       );
 }
 
-/// A list of messages sent in the current channel.
-///
-/// This is implemented using [StreamMessageListView],
-/// a widget that provides query
-/// functionalities fetching the messages from the api and showing them in a
-/// listView.
 class ChannelPage extends StatelessWidget {
-  /// Creates the page that shows the list of messages
   const ChannelPage({
     super.key,
   });
@@ -105,7 +224,7 @@ class ChannelPage extends StatelessWidget {
             Expanded(
               child: StreamMessageListView(),
             ),
-            StreamMessageInput(attachmentLimit: 3),
+            StreamMessageInput(),
           ],
         ),
       );
